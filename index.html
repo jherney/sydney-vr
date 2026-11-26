@@ -138,6 +138,7 @@ body{background:var(--ink);color:var(--fog);font-family:var(--f-body);font-size:
       <button class="btn" id="todBtn">Day</button>
       <button class="btn" id="tourBtn" aria-pressed="false">Tour</button>
       <button class="btn" id="vrBtn" disabled title="Needs a WebXR headset browser">VR n/a</button>
+      <button class="btn" id="photoBtn" title="Save the current view as a PNG">Photo</button>
       <button class="btn" id="helpBtn">Controls</button>
     </div>
   </aside>
@@ -263,7 +264,7 @@ const rig = new THREE.Group(); rig.add(camera); scene.add(rig);
 const hemi = new THREE.HemisphereLight(0xbcd9ef, 0x4a5a3a, 0.9); scene.add(hemi);
 const sun = new THREE.DirectionalLight(0xfff3e0, 2.2);
 sun.castShadow = true;
-sun.shadow.mapSize.set(2048,2048);
+sun.shadow.mapSize.set(matchMedia('(pointer: coarse)').matches ? 1024 : 2048, matchMedia('(pointer: coarse)').matches ? 1024 : 2048);
 Object.assign(sun.shadow.camera, { left:-260, right:260, top:260, bottom:-260, near:10, far:1600 });
 sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.6;
 scene.add(sun, sun.target);
@@ -705,7 +706,9 @@ const player = { x:LM.fiddle[0]+20, z:LM.fiddle[1]-20, y:4, yaw:0, pitch:0, mode
 const keys = new Set();
 addEventListener('keydown', e => {
   if (e.target.closest && e.target.closest('button') && (e.key===' '||e.key==='Enter')) return;
-  const k=e.key.toLowerCase(); keys.add(k);
+  const k=e.key.toLowerCase();
+  if (!$('#help').hidden){ if (k==='escape') $('#startBtn').click(); return; }
+  keys.add(k);
   if (['arrowup','arrowdown','arrowleft','arrowright',' '].includes(k)) e.preventDefault();
   if (k==='f') toggleMode(); if (k==='n') cycleTod(); if (k==='t') toggleTour();
   if (flight && ['w','a','s','d','arrowup','arrowdown','arrowleft','arrowright'].includes(k)) { flight=null; stopTour(); }
@@ -743,6 +746,7 @@ function setMode(m){
 function toggleMode(){ setMode(player.mode==='walk' ? 'fly' : 'walk'); if (player.mode==='fly') player.y += 25; }
 function nearestWalkable(x,z){ for (let r=0;r<2000;r+=20) for (let a=0;a<Math.PI*2;a+=Math.PI/12){ const nx=x+Math.cos(a)*r, nz=z+Math.sin(a)*r; if (walkable(nx,nz) && !nearFoot(nx,nz,.6,true)) return [nx,nz]; } return [-322,-50]; }
 $('#modeBtn').onclick = toggleMode;
+$('#photoBtn').onclick = () => { snapshot = true; toast('Saved view as sydney-vr.png'); };
 
 /* ---------- time of day ---------- */
 const TOD = {
@@ -754,20 +758,22 @@ const TOD_ORDER = ['Day','Dusk','Night']; let todName='Day', todFrom=null, todT=
 const cur = { top:new THREE.Color(), bot:new THREE.Color(), fog:new THREE.Color(), sun:new THREE.Color(), hs:new THREE.Color(), hg:new THREE.Color(), water:new THREE.Color(), dir:new THREE.Vector3(), si:0, hi:0, win:0, lamp:0, stars:0, exp:1 };
 function snapTod(){ const p=TOD[todName]; todFrom = JSON.parse(JSON.stringify(p)); todT = 1; }
 function cycleTod(){ todFrom = { top:cur.top.getHex(), bot:cur.bot.getHex(), fog:cur.fog.getHex(), sun:cur.sun.getHex(), hs:cur.hs.getHex(), hg:cur.hg.getHex(), water:cur.water.getHex(), dir:cur.dir.toArray(), si:cur.si, hi:cur.hi, win:cur.win, lamp:cur.lamp, stars:cur.stars, exp:cur.exp };
-  todName = TOD_ORDER[(TOD_ORDER.indexOf(todName)+1)%3]; todT = reduceMotion ? 1 : 0; $('#todBtn').textContent = todName; }
+  todName = TOD_ORDER[(TOD_ORDER.indexOf(todName)+1)%3]; todT = reduceMotion ? 1 : 0; todDone=false; $('#todBtn').textContent = todName; }
 $('#todBtn').onclick = cycleTod;
-const tmpA=new THREE.Color(), tmpB=new THREE.Color();
+const tmpA=new THREE.Color(), tmpB=new THREE.Color(), tmpD=new THREE.Vector3();
+let todDone=false;
 function applyTod(dt){
-  todT = Math.min(1, todT + dt/2.2); const t = smooth(0,1,todT), A=todFrom, B=TOD[todName];
+  if (todT>=1 && todDone) return;
+  todT = Math.min(1, todT + dt/2.2); todDone = todT>=1; const t = smooth(0,1,todT), A=todFrom, B=TOD[todName];
   for (const k of ['top','bot','fog','sun','hs','hg','water']) cur[k].copy(tmpA.set(A[k])).lerp(tmpB.set(B[k]), t);
   for (const k of ['si','hi','win','lamp','stars','exp']) cur[k] = lerp(A[k], B[k], t);
-  cur.dir.fromArray(A.dir).lerp(new THREE.Vector3().fromArray(B.dir), t).normalize();
+  cur.dir.fromArray(A.dir).lerp(tmpD.fromArray(B.dir), t).normalize();
   skyU.top.value.copy(cur.top); skyU.bot.value.copy(cur.bot); scene.fog.color.copy(cur.fog);
   sun.color.copy(cur.sun); sun.intensity=cur.si; hemi.color.copy(cur.hs); hemi.groundColor.copy(cur.hg); hemi.intensity=cur.hi;
   waterMat.color.copy(cur.water); stars.material.opacity=cur.stars; lampMat.opacity=cur.lamp; renderer.toneMappingExposure=cur.exp;
   for (const m of ALL_WALLS) m.emissiveIntensity = cur.win;
 }
-snapTod();
+todDone=false; snapTod();
 
 /* ---------- flights & tour ---------- */
 let flight=null, tour=null;
@@ -869,6 +875,7 @@ function update(dt){
     if (keys.has('arrowleft')) turn+=1; if (keys.has('arrowright')) turn-=1;
     if (keys.has('e')||keys.has(' ')||held.up) my+=1; if (keys.has('q')||keys.has('c')||held.down) my-=1;
     mx+=joy.x; mz-=joy.y;
+    if (tour && (mx||mz||my||turn)) stopTour();
     if (inXR){
       for (const src of renderer.xr.getSession().inputSources){ const gp=src.gamepad; if(!gp||gp.axes.length<4) continue; const ax=gp.axes[2], ay=gp.axes[3];
         if (src.handedness==='left'){ if(Math.abs(ax)>.15) mx+=ax; if(Math.abs(ay)>.15) mz-=ay; }
@@ -925,8 +932,27 @@ function update(dt){
 addEventListener('resize', () => { camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth,innerHeight); });
 
 setMode('walk');
+// shareable view: #x,z,y,yaw,pitch,mode (restored on load, kept current while moving)
+{
+  const m = /^#v=(-?[\d.]+),(-?[\d.]+),(-?[\d.]+),(-?[\d.]+),(-?[\d.]+),(walk|fly)$/.exec(location.hash);
+  if (m){ const [x,z,y,yaw,pitch] = m.slice(1,6).map(Number);
+    if ([x,z,y,yaw,pitch].every(Number.isFinite)){ Object.assign(player,{ x:clamp(x,-3300,3300), z:clamp(z,-3900,2900), y, yaw, pitch:clamp(pitch,-1.45,1.45) }); setMode(m[6]); } }
+  setInterval(() => { if (renderer.xr.isPresenting) return;
+    history.replaceState(null,'',`#v=${player.x.toFixed(0)},${player.z.toFixed(0)},${player.y.toFixed(1)},${player.yaw.toFixed(2)},${player.pitch.toFixed(2)},${player.mode}`); }, 1000);
+}
 (document.fonts ? document.fonts.ready : Promise.resolve()).then(makeLabels, makeLabels);
-renderer.setAnimationLoop(() => { const dt=Math.min(clock.getDelta(), .05); update(dt); renderer.render(scene,camera); });
+let dprMax = Math.min(devicePixelRatio, 2), slow = 0, fast = 0;
+function setDpr(v){ dprMax = v; renderer.setPixelRatio(v); renderer.setSize(innerWidth, innerHeight); }
+let snapshot = false;
+renderer.setAnimationLoop(() => {
+  const raw = clock.getDelta(), dt = Math.min(raw, .05); update(dt); renderer.render(scene,camera);
+  if (snapshot){ snapshot = false; renderer.domElement.toBlob(b => { const a=document.createElement('a'); a.href=URL.createObjectURL(b); a.download='sydney-vr.png'; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),1000); }); }
+  if (renderer.xr.isPresenting) return;
+  // adaptive resolution: step the pixel ratio down on sustained slow frames, back up when there is headroom
+  if (raw > .034){ slow++; fast = 0; } else if (raw < .019){ fast++; slow = 0; } else slow = fast = 0;
+  if (slow > 45 && dprMax > 1){ setDpr(Math.max(1, dprMax - .25)); slow = 0; }
+  else if (fast > 600 && dprMax < Math.min(devicePixelRatio, 2)){ setDpr(Math.min(Math.min(devicePixelRatio, 2), dprMax + .25)); fast = 0; }
+});
 $('#loading').hidden = true;
 </script>
 
